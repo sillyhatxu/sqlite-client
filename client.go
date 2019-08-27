@@ -213,17 +213,25 @@ func (sc *SqliteClient) insertSchemaVersion(schemaVersion SchemaVersion) {
 }
 
 func (sc *SqliteClient) initialSchemaVersion() error {
-	var count int
-	err := sc.Query(SqliteMasterSQL, func(rows *sql.Rows) error {
-		return rows.Scan(&count)
-	}, "schema_version")
+	exist, err := sc.HasTable("schema_version")
 	if err != nil {
 		return err
 	}
-	if count > 0 {
+	if exist {
 		return nil
 	}
 	return sc.ExecDDL(DDLSchemaVersion)
+}
+
+func (sc *SqliteClient) HasTable(table string) (bool, error) {
+	var count int
+	err := sc.Query(SqliteMasterSQL, func(rows *sql.Rows) error {
+		return rows.Scan(&count)
+	}, table)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 func (sc *SqliteClient) SchemaVersionArray() ([]SchemaVersion, error) {
