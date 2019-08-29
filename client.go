@@ -4,9 +4,11 @@ import (
 	"database/sql"
 	"fmt"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/mitchellh/mapstructure"
 	"github.com/sillyhatxu/convenient-utils/encryption/hash"
 	"github.com/sirupsen/logrus"
 	"io/ioutil"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -258,7 +260,7 @@ func (sc *SqliteClient) Find(sql string, args ...interface{}) ([]map[string]inte
 	}
 	tx, err := db.Begin()
 	if err != nil {
-		logrus.Errorf("mysql client get transaction error. %v", err)
+		logrus.Errorf("sqlite client get transaction error. %v", err)
 		return nil, err
 	}
 	rows, err := tx.Query(sql, args...)
@@ -312,6 +314,84 @@ func (sc *SqliteClient) ExecDDL(ddl string) error {
 	return err
 }
 
+func (sc *SqliteClient) Insert(sql string, args ...interface{}) (int64, error) {
+	db, err := sc.GetDB()
+	if err != nil {
+		return 0, nil
+	}
+	stm, err := db.Prepare(sql)
+	if err != nil {
+		logrus.Errorf("prepare sqlite error. %v", err)
+		return 0, err
+	}
+	defer stm.Close()
+	result, err := stm.Exec(args...)
+	if err != nil {
+		logrus.Errorf("insert data error. %v", err)
+		return 0, err
+	}
+	return result.LastInsertId()
+}
+
+func (sc *SqliteClient) Update(sql string, args ...interface{}) (int64, error) {
+	db, err := sc.GetDB()
+	if err != nil {
+		return 0, nil
+	}
+	stm, err := db.Prepare(sql)
+	if err != nil {
+		logrus.Errorf("prepare sqlite error. %v", err)
+		return 0, err
+	}
+	defer stm.Close()
+	result, err := stm.Exec(args...)
+	if err != nil {
+		logrus.Errorf("update data error. %v", err)
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func (sc *SqliteClient) Delete(sql string, args ...interface{}) (int64, error) {
+	db, err := sc.GetDB()
+	if err != nil {
+		return 0, nil
+	}
+	stm, err := db.Prepare(sql)
+	if err != nil {
+		logrus.Errorf("prepare sqlite error. %v", err)
+		return 0, err
+	}
+	defer stm.Close()
+	result, err := stm.Exec(args...)
+	if err != nil {
+		logrus.Errorf("delete data error. %v", err)
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+type TransactionCallback func(*sql.Tx) error
+
+func (sc *SqliteClient) Transaction(callback TransactionCallback) error {
+	db, err := sc.GetDB()
+	if err != nil {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		logrus.Errorf("sqlite client get transaction error. %v", err)
+		return err
+	}
+	err = callback(tx)
+	if err != nil {
+		logrus.Errorf("transaction data error. %v", err)
+		tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
 type FieldFunc func(rows *sql.Rows) error
 
 func (sc *SqliteClient) Query(query string, fieldFunc FieldFunc, args ...interface{}) error {
@@ -333,59 +413,153 @@ func (sc *SqliteClient) Query(query string, fieldFunc FieldFunc, args ...interfa
 	return rows.Err()
 }
 
-func (sc *SqliteClient) Insert(sql string, args ...interface{}) (int64, error) {
-	db, err := sc.GetDB()
+func (sc *SqliteClient) FindMapFirst(sql string, args ...interface{}) (map[string]interface{}, error) {
+	array, err := sc.FindMapArray(sql, args...)
 	if err != nil {
-		return 0, nil
+		return nil, err
 	}
-	stm, err := db.Prepare(sql)
-	if err != nil {
-		logrus.Errorf("prepare mysql error. %v", err)
-		return 0, err
+	if array == nil || len(array) == 0 {
+		return nil, nil
 	}
-	defer stm.Close()
-	result, err := stm.Exec(args...)
-	if err != nil {
-		logrus.Errorf("insert data error. %v", err)
-		return 0, err
-	}
-	return result.LastInsertId()
+	return array[0], nil
 }
 
-func (sc *SqliteClient) Update(sql string, args ...interface{}) (int64, error) {
+func (sc *SqliteClient) FindMapArray(sql string, args ...interface{}) ([]map[string]interface{}, error) {
 	db, err := sc.GetDB()
 	if err != nil {
-		return 0, nil
+		return nil, err
 	}
-	stm, err := db.Prepare(sql)
+	tx, err := db.Begin()
 	if err != nil {
-		logrus.Errorf("prepare mysql error. %v", err)
-		return 0, err
+		log.Println("sqlite client get transaction error.", err)
+		return nil, err
 	}
-	defer stm.Close()
-	result, err := stm.Exec(args...)
+	rows, err := tx.Query(sql, args...)
 	if err != nil {
-		logrus.Errorf("update data error. %v", err)
-		return 0, err
+		log.Println("Query error.", err)
+		return nil, err
 	}
-	return result.RowsAffected()
+	defer rows.Close()
+	columns, err := rows.Columns()
+	if err != nil {
+		log.Println("rows.Columns() error.", err)
+		return nil, err
+	}
+	//values是每个列的值，这里获取到byte里
+	values := make([][]byte, len(columns))
+	//query.Scan的参数，因为每次查询出来的列是不定长的，用len(cols)定住当次查询的长度
+	scans := make([]interface{}, len(columns))
+	//让每一行数据都填充到[][]byte里面
+	for i := range values {
+		scans[i] = &values[i]
+	}
+	//最后得到的map
+	var results []map[string]interface{}
+	for rows.Next() { //循环，让游标往下推
+		if err := rows.Scan(scans...); err != nil { //query.Scan查询出来的不定长值放到scans[i] = &values[i],也就是每行都放在values里
+			return nil, err
+		}
+		row := make(map[string]interface{}) //每行数据
+		for k, v := range values {          //每行数据是放在values里面，现在把它挪到row里
+			key := columns[k]
+			//valueType := reflect.TypeOf(v)
+			//log.Info(valueType)
+			row[key] = string(v)
+		}
+		results = append(results, row)
+	}
+	return results, nil
 }
 
-func (sc *SqliteClient) Delete(sql string, args ...interface{}) (int64, error) {
+func (sc *SqliteClient) FindList(sql string, input interface{}, args ...interface{}) error {
+	results, err := sc.FindMapArray(sql, args...)
+	if err != nil {
+		return err
+	}
+	config := &mapstructure.DecoderConfig{
+		DecodeHook:       mapstructure.StringToTimeHookFunc("2006-01-02 15:04:05"),
+		WeaklyTypedInput: true,
+		Result:           input,
+	}
+	decoder, err := mapstructure.NewDecoder(config)
+	if err != nil {
+		return err
+	}
+	err = decoder.Decode(results)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (sc *SqliteClient) FindListByConfig(sql string, input interface{}, config *mapstructure.DecoderConfig, args ...interface{}) error {
+	results, err := sc.FindMapArray(sql, args...)
+	if err != nil {
+		return err
+	}
+	decoder, err := mapstructure.NewDecoder(config)
+	if err != nil {
+		return err
+	}
+	err = decoder.Decode(results)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (sc *SqliteClient) FindFirst(sql string, input interface{}, args ...interface{}) error {
+	result, err := sc.FindMapFirst(sql, args...)
+	if err != nil {
+		return err
+	}
+	config := &mapstructure.DecoderConfig{
+		DecodeHook:       mapstructure.StringToTimeHookFunc("2006-01-02 15:04:05"),
+		WeaklyTypedInput: true,
+		Result:           input,
+	}
+	decoder, err := mapstructure.NewDecoder(config)
+	if err != nil {
+		return err
+	}
+	err = decoder.Decode(result)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (sc *SqliteClient) FindFirstByConfig(sql string, input interface{}, config *mapstructure.DecoderConfig, args ...interface{}) error {
+	result, err := sc.FindMapFirst(sql, args...)
+	if err != nil {
+		return err
+	}
+	decoder, err := mapstructure.NewDecoder(config)
+	if err != nil {
+		return err
+	}
+	err = decoder.Decode(result)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (sc *SqliteClient) Count(sql string, args ...interface{}) (int64, error) {
 	db, err := sc.GetDB()
 	if err != nil {
-		return 0, nil
-	}
-	stm, err := db.Prepare(sql)
-	if err != nil {
-		logrus.Errorf("prepare mysql error. %v", err)
 		return 0, err
 	}
-	defer stm.Close()
-	result, err := stm.Exec(args...)
+	tx, err := db.Begin()
 	if err != nil {
-		logrus.Errorf("delete data error. %v", err)
+		log.Println("sqlite client get connection error.", err)
 		return 0, err
 	}
-	return result.RowsAffected()
+	var count int64
+	countErr := tx.QueryRow(sql, args...).Scan(&count)
+	if countErr != nil {
+		log.Println("Query count error.", err)
+		return 0, err
+	}
+	return count, nil
 }
