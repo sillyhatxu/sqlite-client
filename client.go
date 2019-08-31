@@ -263,6 +263,7 @@ func (sc *SqliteClient) Find(sql string, args ...interface{}) ([]map[string]inte
 		logrus.Errorf("sqlite client get transaction error. %v", err)
 		return nil, err
 	}
+	defer tx.Commit()
 	rows, err := tx.Query(sql, args...)
 	if err != nil {
 		logrus.Errorf("query error. %v", err)
@@ -434,6 +435,7 @@ func (sc *SqliteClient) FindMapArray(sql string, args ...interface{}) ([]map[str
 		log.Println("sqlite client get transaction error.", err)
 		return nil, err
 	}
+	defer tx.Commit()
 	rows, err := tx.Query(sql, args...)
 	if err != nil {
 		log.Println("Query error.", err)
@@ -555,6 +557,7 @@ func (sc *SqliteClient) Count(sql string, args ...interface{}) (int64, error) {
 		log.Println("sqlite client get connection error.", err)
 		return 0, err
 	}
+	defer tx.Commit()
 	var count int64
 	countErr := tx.QueryRow(sql, args...).Scan(&count)
 	if countErr != nil {
