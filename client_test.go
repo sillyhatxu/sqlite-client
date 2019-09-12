@@ -1,4 +1,4 @@
-package sqliteclient
+package client
 
 import (
 	"fmt"
@@ -8,9 +8,14 @@ import (
 	"time"
 )
 
-var Client = NewSqliteClient("./test.db", "/Users/shikuanxu/go/src/github.com/sillyhatxu/docker-ui/db/migration")
+//const path = "/Users/shikuanxu/go/src/github.com/sillyhatxu/mini-mq"
+
+const path = "/Users/cookie/go/gopath/src/github.com/sillyhatxu/mini-mq"
+
+var Client *SqliteClient
 
 func init() {
+	Client = NewSqliteClient("./test.db", DDLPath(fmt.Sprintf("%s/db/migration", path)))
 	err := Client.Initial()
 	if err != nil {
 		logrus.Error(err)
