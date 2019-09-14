@@ -333,7 +333,7 @@ func (sc *SqliteClient) FindList(sql string, input interface{}, args ...interfac
 	return nil
 }
 
-func (sc *SqliteClient) FindListByConfig(sql string, input interface{}, config *mapstructure.DecoderConfig, args ...interface{}) error {
+func (sc *SqliteClient) FindListByConfig(sql string, config *mapstructure.DecoderConfig, args ...interface{}) error {
 	results, err := sc.FindMapArray(sql, args...)
 	if err != nil {
 		return err
@@ -370,7 +370,7 @@ func (sc *SqliteClient) FindFirst(sql string, input interface{}, args ...interfa
 	return nil
 }
 
-func (sc *SqliteClient) FindFirstByConfig(sql string, input interface{}, config *mapstructure.DecoderConfig, args ...interface{}) error {
+func (sc *SqliteClient) FindFirstByConfig(sql string, config *mapstructure.DecoderConfig, args ...interface{}) error {
 	result, err := sc.FindMapFirst(sql, args...)
 	if err != nil {
 		return err
